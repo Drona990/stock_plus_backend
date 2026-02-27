@@ -102,6 +102,7 @@ else:
 # --------------------------------------------------
 # AUTH & JWT
 # --------------------------------------------------
+ROOT_URLCONF = 'stockplus.urls'
 AUTH_USER_MODEL = 'authentication.CustomUser'
 WSGI_APPLICATION = 'stockplus.wsgi.application'
 ASGI_APPLICATION = 'stockplus.asgi.application'
@@ -115,6 +116,22 @@ SIMPLE_JWT = {
 # --------------------------------------------------
 # STATIC & MEDIA
 # --------------------------------------------------
+TEMPLATES = [
+    {
+        'BACKEND': 'django.template.backends.django.DjangoTemplates',
+        'DIRS': [],
+        'APP_DIRS': True, # Ye DRF ke templates dhoondhne ke liye zaroori hai
+        'OPTIONS': {
+            'context_processors': [
+                'django.template.context_processors.debug',
+                'django.template.context_processors.request',
+                'django.contrib.auth.context_processors.auth',
+                'django.contrib.messages.context_processors.messages',
+            ],
+        },
+    },
+]
+
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / "staticfiles"
 # WhiteNoise storage for compression

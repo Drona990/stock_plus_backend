@@ -13,12 +13,53 @@ import traceback
 from django.utils import timezone
 from rest_framework.permissions import IsAuthenticated
 from django.db import transaction
-
-
 from .serializers import (
     InventoryCategorySerializer, ProductSubGroupSerializer
     
 )
+
+import psutil
+import shutil
+from rest_framework.decorators import api_view, permission_classes, authentication_classes
+from rest_framework.permissions import AllowAny
+from django.db import connection
+
+@api_view(['GET'])
+@authentication_classes([]) 
+@permission_classes([AllowAny]) 
+def health_check(request):
+    # 1. RAM Usage check
+    vm = psutil.virtual_memory()
+    ram_usage = vm.percent # Percentage of RAM used
+
+    # 2. Disk Usage check (Root directory '/')
+    total, used, free = shutil.disk_usage("/")
+    disk_usage = (used / total) * 100
+
+    health_status = {
+        "status": "healthy",
+        "database": "up",
+        "resources": {
+            "ram_used_percent": ram_usage,
+            "disk_used_percent": round(disk_usage, 2),
+        }
+    }
+
+    # 3. Database Check
+    try:
+        connection.ensure_connection()
+    except Exception:
+        health_status["database"] = "down"
+        health_status["status"] = "unhealthy"
+
+    # 4. Critical Threshold check (Alert logic)
+    # Agar 90% se zyada RAM ya Disk bhar gayi toh status "warning" kar dein
+    if ram_usage > 90 or disk_usage > 90:
+        health_status["status"] = "warning"
+        health_status["message"] = "System resources are running low!"
+
+    status_code = 200 if health_status["status"] != "unhealthy" else 503
+    return Response(health_status, status=status_code)
 
 
 class InventoryBaseViewSet(viewsets.ModelViewSet):

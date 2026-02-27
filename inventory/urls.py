@@ -1,7 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
-    DashboardViewSet, InventoryCategoryViewSet, ProductGroupViewSet, ProductSubGroupViewSet, SalesViewSet, StockTransactionViewSet, LocationViewSet
+    DashboardViewSet, InventoryCategoryViewSet, ProductGroupViewSet, ProductSubGroupViewSet, SalesViewSet, StockTransactionViewSet, LocationViewSet, health_check
 
 )
 
@@ -15,5 +15,6 @@ router.register(r'sales', SalesViewSet, basename='sales')
 router.register(r'dashboard', DashboardViewSet, basename='dashboard')
 
 urlpatterns = [
+    path('health/', health_check, name='health_check'),
     path('', include(router.urls)),
 ]
