@@ -1,5 +1,8 @@
+import uuid
+
 from django.db.models import Q
 from django.contrib.auth import authenticate
+from django.shortcuts import get_object_or_404
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -79,192 +82,193 @@ class CreateFirstSuperuserView(APIView):
         )
 
 
+
+
+# --- 1. CREATE STAFF VIEW (With 5 User Limit for Admins) ---
 class CreateStaffView(APIView):
     permission_classes = [IsAdminOrSuperuser]
 
     def post(self, request):
+        print(f"\n--- [LOG: CREATE STAFF STARTED] ---")
+        print(f"Payload: {request.data}")
+
         serializer = CreateStaffSerializer(data=request.data)
         if not serializer.is_valid():
-            return error_response(serializer.errors, 400)
+            print(f"❌ Serializer Errors: {serializer.errors}")
+            return Response(serializer.errors, status=400)
 
-        # 1. ✅ Limit Check: Admin/Manager can create only 4 users
-        staff_count = CustomUser.objects.filter(created_by=request.user).count()
-        if staff_count >= 4:
-            return error_response("Limit reached: You can only create a maximum of 4 staff members.", 400)
+        # ✅ LOGIC: Admin/Manager can create ONLY 5 staff members
+        if request.user.role == 'admin':
+            staff_count = CustomUser.objects.filter(created_by=request.user).count()
+            if staff_count >= 5:
+                return error_response("Limit reached: You can only create a maximum of 5 staff members.", 400)
 
-        # 2. ✅ Location Validation
-        location_id = request.data.get('location')
-        if not location_id:
-            return error_response("Location is required.", 400)
-        
-        try:
-            selected_location = Location.objects.get(id=location_id)
-        except (Location.DoesNotExist, ValueError):
-            return error_response("Invalid Location ID.", 400)
-
-        # 3. Role Validation
-        requested_role = request.data.get('role', 'staff')
-        allowed_roles = ['staff']
-        if requested_role not in allowed_roles:
-            return error_response(f"You can only create: {allowed_roles}", 400)
-
-        # 4. Username Generation
-        email = serializer.validated_data['email']
-        username = email.split('@')[0]
-        original_username = username
-        counter = 1
-        while CustomUser.objects.filter(username=username).exists():
-            username = f"{original_username}{counter}"
-            counter += 1
-
-        # 5. ✅ Create User with Location inside a Transaction
+        v_data = serializer.validated_data
         try:
             with transaction.atomic():
-                user = CustomUser.objects.create_user(
-                    username=username,
-                    email=email,
-                    password=serializer.validated_data['password'],
-                    name=serializer.validated_data.get('name', ''),
-                    role=requested_role,
-                    location=selected_location, # 👈 Location saved here
+                # Unique Username Logic
+                uname = v_data['email'].split('@')[0]
+                while CustomUser.objects.filter(username=uname).exists():
+                    uname = f"{uname}{uuid.uuid4().hex[:4]}"
+
+                # ✅ MANUAL OBJECT CREATION (Ensures all fields save)
+                user = CustomUser(
+                    username=uname,
+                    email=v_data['email'],
+                    first_name=request.data.get('first_name', ''),
+                    last_name=request.data.get('last_name', ''),
+                    name=request.data.get('name', ''),
+                    phone_number=request.data.get('phone_number', ''),
+                    dob=request.data.get('dob'),
+                    gender=request.data.get('gender', 'M'),
+                    role='staff',
                     created_by=request.user,
                     is_verified=True,
-                    is_password_set=True,
+                    is_active=True
                 )
 
+                # Location handling
+                loc_id = request.data.get('location')
+                if loc_id:
+                    user.location = Location.objects.filter(id=loc_id).first()
+
+                user.set_password(v_data['password'])
+                user.save() 
+                
                 if user.email:
-                    RecoveryContact.objects.create(
-                        user=user,
-                        contact_type="email",
-                        contact_value=user.email,
-                        is_verified=True
+                    RecoveryContact.objects.get_or_create(
+                        user=user, contact_type="email", 
+                        contact_value=user.email, defaults={'is_verified': True}
                     )
 
-            return success_response(
-                f"Staff created successfully at {selected_location.name}",
-                data={
-                    "user_id": str(user.id),
-                    "username": user.username,
-                    "location": selected_location.name,
-                    "role": user.role,
-                },
-                status_code=201
-            )
+            print(f"✅ DB SUCCESS: Staff {user.username} saved with Location: {user.location}")
+            return Response({"success": True, "id": str(user.id)}, status=201)
+
         except Exception as e:
-            return error_response(f"Database error: {str(e)}", 500)
+            print(f"🔥 ERROR: {str(e)}")
+            return Response({"error": str(e)}, status=500)
 
 
+
+# --- CREATE ADMIN VIEW (Fixed logic for data save) ---
 class CreateAdminView(APIView):
     permission_classes = [IsSuperuser]
 
     def post(self, request):
+        print(f"\n--- [DEBUG: CREATE ADMIN REQUEST] ---")
+        print(f"RAW DATA: {request.data}")
+
         serializer = CreateAdminSerializer(data=request.data)
         if not serializer.is_valid():
+            print(f"❌ SERIALIZER ERRORS: {serializer.errors}")
             return error_response(serializer.errors, 400)
 
-        email = serializer.validated_data['email']
-        username = email.split('@')[0] 
-        
-        # Ensure username uniqueness
-        counter = 1
-        original_username = username
-        while CustomUser.objects.filter(username=username).exists():
-            username = f"{original_username}{counter}"
-            counter += 1
+        v_data = serializer.validated_data
+        try:
+            with transaction.atomic():
+                # Unique Username Generation
+                uname = v_data['email'].split('@')[0]
+                while CustomUser.objects.filter(username=uname).exists():
+                    uname = f"{uname}{uuid.uuid4().hex[:4]}"
 
-        user = CustomUser.objects.create_user(
-            username=username,
-            email=email,
-            password=serializer.validated_data['password'],
-            name=serializer.validated_data.get('name', ''),
-            role='admin',
-            created_by=request.user,
-            is_verified=True,
-            is_password_set=True,
-        )
+                # ✅ FORCED SAVE: Direct initialization with all fields
+                user = CustomUser(
+                    username=uname,
+                    email=v_data['email'],
+                    first_name=v_data.get('first_name', ''),
+                    last_name=v_data.get('last_name', ''),
+                    name=v_data.get('name', f"{v_data.get('first_name', '')} {v_data.get('last_name', '')}".strip()),
+                    phone_number=v_data.get('phone_number', ''),
+                    dob=v_data.get('dob'),
+                    gender=v_data.get('gender', 'M'),
+                    role='admin', # Fixed role as admin
+                    created_by=request.user,
+                    is_verified=True,
+                    is_password_set=True,
+                    is_active=True
+                )
 
-        if user.email:
-            RecoveryContact.objects.create(
-                user=user,
-                contact_type="email",
-                contact_value=user.email,
-                is_verified=True
-            )
+                # Location Mapping (Integer ID to Object)
+                loc_id = v_data.get('location')
+                if loc_id:
+                    user.location = Location.objects.filter(id=loc_id).first()
 
-        return success_response(
-            "Admin created successfully",
-            data={
-                "user_id": str(user.id),
-                "username": user.username,
-                "email": user.email,
-                "role": user.role,
-                "message": f"Login with email: {user.email} and provided password"
-            },
-            status_code=201
-        )
+                user.set_password(v_data['password'])
+                user.save() # Commit to DB
 
+                if user.email:
+                    RecoveryContact.objects.get_or_create(
+                        user=user, contact_type="email", 
+                        contact_value=user.email, defaults={'is_verified': True}
+                    )
 
+                print(f"✅ DB SUCCESS: Admin {user.username} saved with DOB: {user.dob}")
 
-class CreateStaffView1(APIView):
+            return success_response("Admin created successfully", data={"user_id": str(user.id)}, status_code=201)
+
+        except Exception as e:
+            print(f"🔥 DB ERROR: {str(e)}")
+            return error_response(str(e), 500)
+
+# --- 2. UPDATE PROFILE VIEW (Admin/Superuser Permission Only) ---
+class AdminUpdateUserView(APIView):
+    """Admin updates another user's profile. Staff is blocked."""
     permission_classes = [IsAdminOrSuperuser]
 
-    def post(self, request):
-        print(f"DEBUG: Incoming Request Data: {request.data}")
-        serializer = CreateStaffSerializer(data=request.data)
+    def put(self, request, user_id):
+        # 1. Access Check: Staff block
+        if request.user.role == 'staff':
+            return error_response("Access Denied: Staff cannot update user profiles.", 403)
+
+        # 2. Get User (Handles UUID correctly)
+        user_to_edit = get_object_or_404(CustomUser, id=user_id)
+
+        # 3. Ownership Check: Admin only edits their own created staff
+        if request.user.role != 'superuser' and user_to_edit.created_by != request.user:
+            return error_response("Permission Denied: You didn't create this user.", 403)
+
+        # 4. Update fields
+        if 'name' in request.data: user_to_edit.name = request.data['name']
+        if 'phone_number' in request.data: user_to_edit.phone_number = request.data['phone_number']
+        if 'dob' in request.data: user_to_edit.dob = request.data['dob']
+        if 'gender' in request.data: user_to_edit.gender = request.data['gender']
+        
+        if 'location' in request.data:
+            loc_id = request.data['location']
+            user_to_edit.location = get_object_or_404(Location, id=loc_id)
+
+        # ✅ FIXED: Password update logic
+        if 'password' in request.data and request.data['password']:
+            user_to_edit.set_password(request.data['password'])
+            user_to_edit.is_password_set = True
+
+        user_to_edit.save()
+        return success_response("User profile updated successfully")
+
+
+# --- 4. SELF PROFILE UPDATE (Blocked for Staff if needed) ---
+class UpdateProfileView(APIView):
+    """User updates their own profile"""
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request):
+        # ✅ LOGIC: If you want to block staff even from updating their OWN profile
+        if request.user.role == 'staff':
+            return error_response("Staff accounts are not permitted to modify profile data.", 403)
+
+        serializer = UpdateProfileSerializer(data=request.data)
         if not serializer.is_valid():
-            print(f"❌ SERIALIZER ERRORS: {serializer.errors}") # 👈 Ye terminal mein asali wajah batayega
             return error_response(serializer.errors, 400)
 
-        # 1. ✅ Request se Role uthaiye (Default 'staff' rakhein)
-        # Body: {"email": "...", "password": "...", "role": "chef"}
-        requested_role = request.data.get('role', 'staff')
-        print(f"DEBUG: Requested Role: {requested_role}")
-
-        # 2. ✅ Validation: Admin superuser ya admin create na kar paye
-        allowed_roles = ['staff']
-        if requested_role not in allowed_roles:
-            print(f"DEBUG: Role {requested_role} rejected. Not in {allowed_roles}")
-            return error_response(f"You can only create: {allowed_roles}", 400)
-
-        email = serializer.validated_data['email']
-        username = email.split('@')[0]
+        user = request.user
+        if 'name' in serializer.validated_data: user.name = serializer.validated_data['name']
+        if 'dob' in serializer.validated_data: user.dob = serializer.validated_data['dob']
+        if 'gender' in serializer.validated_data: user.gender = serializer.validated_data['gender']
         
-        counter = 1
-        original_username = username
-        while CustomUser.objects.filter(username=username).exists():
-            username = f"{original_username}{counter}"
-            counter += 1
+        user.save()
+        return success_response("Profile updated successfully", data={"user_id": str(user.id), "name": user.name})
 
-        # 3. ✅ Use requested_role instead of hardcoded 'staff'
-        user = CustomUser.objects.create_user(
-            username=username,
-            email=email,
-            password=serializer.validated_data['password'],
-            name=serializer.validated_data.get('name', ''),
-            role=requested_role, # Dynamic role yahan aayega
-            created_by=request.user,
-            is_verified=True,
-            is_password_set=True,
-        )
 
-        if user.email:
-            RecoveryContact.objects.create(
-                user=user,
-                contact_type="email",
-                contact_value=user.email,
-                is_verified=True
-            )
-
-        return success_response(
-            f"{requested_role.capitalize()} created successfully",
-            data={
-                "user_id": str(user.id),
-                "username": user.username,
-                "role": user.role,
-                "message": f"Login with email: {user.email}"
-            },
-            status_code=201
-        )
 
 
 
@@ -381,48 +385,7 @@ class ActivateStaffView(APIView):
             data={"user_id": str(staff.id), "is_active": staff.is_active}
         )
 
-class UpdateProfileView(APIView):
-    """User updates their profile after login"""
-    permission_classes = [IsAuthenticated]
 
-    def patch(self, request):
-        """
-        Update user profile
-        Body: {
-            "name": "Full Name",
-            "dob": "1990-01-15",
-            "gender": "Male"
-        }
-        """
-        serializer = UpdateProfileSerializer(data=request.data)
-        if not serializer.is_valid():
-            return error_response(serializer.errors, 400)
-
-        user = request.user
-        
-        if 'name' in serializer.validated_data:
-            user.name = serializer.validated_data['name']
-        
-        if 'dob' in serializer.validated_data:
-            user.dob = serializer.validated_data['dob']
-        
-        if 'gender' in serializer.validated_data:
-            user.gender = serializer.validated_data['gender']
-        
-        user.save()
-
-        return success_response(
-            "Profile updated successfully",
-            data={
-                "user_id": str(user.id),
-                "email": user.email,
-                "name": user.name,
-                "dob": user.dob,
-                "gender": user.gender,
-                "role": user.role
-            }
-        )
-    
     
 class UpdateFCMTokenView(APIView):
     permission_classes = [IsAuthenticated]

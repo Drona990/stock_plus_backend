@@ -61,7 +61,14 @@ class CreateSuperuserSerializer(serializers.Serializer):
 class CreateAdminSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(min_length=8, write_only=True)
-    name = serializers.CharField(required=False)
+    name = serializers.CharField(required=False, allow_blank=True)
+    # ✅ Inhe add karna zaroori hai
+    first_name = serializers.CharField(required=False, allow_blank=True)
+    last_name = serializers.CharField(required=False, allow_blank=True)
+    phone_number = serializers.CharField(required=False, allow_blank=True)
+    dob = serializers.DateField(required=False, allow_null=True)
+    gender = serializers.CharField(required=False, allow_blank=True)
+    location = serializers.IntegerField(required=False, allow_null=True)
 
     def validate_email(self, value):
         if CustomUser.objects.filter(email=value).exists():
@@ -72,19 +79,29 @@ class CreateAdminSerializer(serializers.Serializer):
 class CreateStaffSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(min_length=8, write_only=True)
-    name = serializers.CharField(required=False)
-    role = serializers.CharField(required=False) # 👈 Ye field add karna zaruri hai
+    name = serializers.CharField(required=False, allow_blank=True)
+    role = serializers.CharField(required=False, default='staff')
+    first_name = serializers.CharField(required=False, allow_blank=True)
+    last_name = serializers.CharField(required=False, allow_blank=True)
+    phone_number = serializers.CharField(required=False, allow_blank=True)
+    dob = serializers.DateField(required=False, allow_null=True)
+    gender = serializers.CharField(required=False, allow_blank=True)
+    location = serializers.IntegerField(required=False, allow_null=True)
 
-    def validate_email(self, value):
-        if CustomUser.objects.filter(email=value).exists():
-            raise serializers.ValidationError("Email already exists")
-        return value
+    def validate(self, data):
+        # --- [SERIALIZER LOG] ---
+        print("\n--- [STEP 2: SERIALIZER VALIDATING DATA] ---")
+        print(f"Data reaching Serializer: {data}")
+        return data
+
 
 
 class UpdateProfileSerializer(serializers.Serializer):
     name = serializers.CharField(required=False)
     dob = serializers.DateField(required=False)
     gender = serializers.CharField(required=False)
+
+
 
 class ForgotPasswordVerifyOTPSerializer(serializers.Serializer):
     contact = serializers.CharField()

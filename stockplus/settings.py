@@ -10,25 +10,17 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
 # --------------------------------------------------
-# CORE SECURITY (Environment Driven)
+# SECURITY
 # --------------------------------------------------
-SECRET_KEY = os.getenv("SECRET_KEY", "django-insecure-default-key-change-this")
+SECRET_KEY = os.getenv("SECRET_KEY")
 DEBUG = os.getenv("DEBUG") == "True"
-
-# Production mein host restricted hone chahiye, Dev mein sab allow
-if DEBUG:
-    ALLOWED_HOSTS = ['*']
-    CORS_ALLOW_ALL_ORIGINS = True
-else:
-    ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "").split(",")
-    CORS_ALLOW_ALL_ORIGINS = False
-    CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")
+ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "").split(",")
 
 # --------------------------------------------------
-# APP DEFINITION
+# APPLICATION DEFINITION
 # --------------------------------------------------
 INSTALLED_APPS = [
-    'daphne', # Must be at the top for ASGI
+    'daphne', # ASGI support
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -36,14 +28,14 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
 
-    # Third-party
+    # Third-party apps
     'channels',
     'rest_framework',
     'rest_framework_simplejwt',
     'corsheaders',    
     'django_filters',
 
-    # Local
+    # Local apps
     'core',
     'authentication',
     'inventory',
@@ -51,9 +43,8 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
-    'whitenoise.middleware.WhiteNoiseMiddleware', # ✅ Best for Static Files in Prod
     'django.contrib.sessions.middleware.SessionMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
+    'corsheaders.middleware.CorsMiddleware',  # Top priority for Flutter/Web
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -62,18 +53,20 @@ MIDDLEWARE = [
 ]
 
 # --------------------------------------------------
-# PRODUCTION SECURITY HEADERS
+# CORS CONFIGURATION
 # --------------------------------------------------
-if not DEBUG:
-    SECURE_BROWSER_XSS_FILTER = True
-    SECURE_CONTENT_TYPE_NOSNIFF = True
-    SECURE_SSL_REDIRECT = os.getenv("SECURE_SSL_REDIRECT") == "True"
-    SESSION_COOKIE_SECURE = True
-    CSRF_COOKIE_SECURE = True
-    X_FRAME_OPTIONS = 'DENY'
+CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_CREDENTIALS = True
 
 # --------------------------------------------------
-# DATABASE & CHANNELS
+# PROJECT URLS & WSGI/ASGI (Mapped to 'stockplus')
+# --------------------------------------------------
+ROOT_URLCONF = 'stockplus.urls'
+WSGI_APPLICATION = 'stockplus.wsgi.application'
+ASGI_APPLICATION = 'stockplus.asgi.application'
+
+# --------------------------------------------------
+# DATABASE (PostgreSQL)
 # --------------------------------------------------
 DATABASES = {
     'default': {
@@ -86,68 +79,29 @@ DATABASES = {
     }
 }
 
-# Production mein Redis zaroori hai, Dev mein In-Memory use kar sakte hain
-if DEBUG:
-    CHANNEL_LAYERS = {
-        "default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}
-    }
-else:
-    CHANNEL_LAYERS = {
-        "default": {
-            "BACKEND": "channels_redis.core.RedisChannelLayer",
-            "CONFIG": {"hosts": [(os.getenv("REDIS_URL", "127.0.0.1"), 6379)]},
-        },
-    }
+# --------------------------------------------------
+# AUTHENTICATION (Custom Backends)
+# --------------------------------------------------
+AUTH_USER_MODEL = 'authentication.CustomUser'
+
+AUTHENTICATION_BACKENDS = [
+    'django.contrib.auth.backends.ModelBackend',
+    'authentication.multilogin.MultiLoginBackend', # Your manual login logic
+]
 
 # --------------------------------------------------
-# AUTH & JWT
+# DJANGO REST FRAMEWORK (Custom Exception Handling)
 # --------------------------------------------------
-ROOT_URLCONF = 'stockplus.urls'
-AUTH_USER_MODEL = 'authentication.CustomUser'
-WSGI_APPLICATION = 'stockplus.wsgi.application'
-ASGI_APPLICATION = 'stockplus.asgi.application'
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+    'EXCEPTION_HANDLER': 'authentication.utils.exceptions.custom_exception_handler',
+}
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(days=60),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=100),
-    'ROTATE_REFRESH_TOKENS': True,
-}
-
-# --------------------------------------------------
-# STATIC & MEDIA
-# --------------------------------------------------
-TEMPLATES = [
-    {
-        'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
-        'APP_DIRS': True, # Ye DRF ke templates dhoondhne ke liye zaroori hai
-        'OPTIONS': {
-            'context_processors': [
-                'django.template.context_processors.debug',
-                'django.template.context_processors.request',
-                'django.contrib.auth.context_processors.auth',
-                'django.contrib.messages.context_processors.messages',
-            ],
-        },
-    },
-]
-
-STATIC_URL = '/static/'
-STATIC_ROOT = BASE_DIR / "staticfiles"
-# WhiteNoise storage for compression
-STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
-
-MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'media'
-
-# --------------------------------------------------
-# CACHING (Database Backend is reliable for VPS)
-# --------------------------------------------------
-CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
-        'LOCATION': 'my_cache_table',
-    }
 }
 
 # --------------------------------------------------
@@ -169,7 +123,7 @@ LOGGING = {
             'level': 'ERROR',
             'class': 'logging.handlers.RotatingFileHandler',
             'filename': LOG_DIR / 'django.log',
-            'maxBytes': 1024 * 1024 * 5, # 5MB
+            'maxBytes': 1024 * 1024 * 5,
             'backupCount': 5,
             'formatter': 'verbose',
         },
@@ -177,4 +131,17 @@ LOGGING = {
     'root': {'handlers': ['console', 'file'], 'level': 'INFO'},
 }
 
+# --------------------------------------------------
+# STATIC & MEDIA FILES
+# --------------------------------------------------
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / "staticfiles"
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+CSRF_TRUSTED_ORIGINS = [
+    "http://10.158.29.96", 
+    "http://187.77.187.220",
+]

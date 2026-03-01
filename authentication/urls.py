@@ -31,5 +31,6 @@ urlpatterns = [
     path('profile/update/', UpdateProfileView.as_view(), name='update-profile'),
     path('user/update-fcm-token/', UpdateFCMTokenView.as_view(), name='update-fcm'),
     path('user/dashboard/', UserDashboardView.as_view(), name='user-dashboard'),
+    path('user/<uuid:user_id>/update/', AdminUpdateUserView.as_view(), name='admin-user-update'),
 
 ]
