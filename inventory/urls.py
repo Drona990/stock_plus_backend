@@ -1,7 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
-    DashboardViewSet, InventoryCategoryViewSet, ProductGroupViewSet, ProductSubGroupViewSet, SalesViewSet, StockTransactionViewSet, LocationViewSet, health_check
+    DashboardViewSet, FetchBillForReturnView, InventoryCategoryViewSet, ProcessReturnExchangeView, ProductGroupViewSet, ProductSubGroupViewSet, SalesViewSet, StockTransactionViewSet, LocationViewSet, health_check
 
 )
 
@@ -16,5 +16,7 @@ router.register(r'dashboard', DashboardViewSet, basename='dashboard')
 
 urlpatterns = [
     path('health/', health_check, name='health_check'),
+    path('returns/fetch/<path:invoice_no>/', FetchBillForReturnView.as_view(), name='fetch-bill'),
+    path('returns/process/', ProcessReturnExchangeView.as_view(), name='process-return-exchange'),
     path('', include(router.urls)),
 ]

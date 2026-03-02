@@ -13,6 +13,7 @@ import traceback
 from django.utils import timezone
 from rest_framework.permissions import IsAuthenticated
 from django.db import transaction
+from rest_framework.views import APIView
 from .serializers import (
     InventoryCategorySerializer, ProductSubGroupSerializer
     
@@ -92,9 +93,7 @@ class ProductSubGroupViewSet(viewsets.ModelViewSet):
     serializer_class = ProductSubGroupSerializer
     permission_classes = [IsAdminOrSuperuser]
     
-    # Filtering setup
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
-    # Taaki aap kisi specific group ke saare sub-names filter kar sakein
     filterset_fields = ['group'] 
     search_fields = ['name', 'group__name']
 
@@ -103,7 +102,7 @@ class ProductSubGroupViewSet(viewsets.ModelViewSet):
 class StockTransactionViewSet(viewsets.ModelViewSet):
     queryset = StockTransaction.objects.all().order_by('-created_at')
     serializer_class = StockTransactionSerializer
-    permission_classes = [IsAuthenticated] # Ensure user is logged in
+    permission_classes = [IsAuthenticated] 
 
     def get_serializer_context(self):
         # ✅ Request object ko context mein bhej rahe hain
@@ -174,6 +173,74 @@ class SalesViewSet(viewsets.ModelViewSet):
             return Response({"error": "Barcode invalid or sold"}, status=404)
 
 
+class FetchBillForReturnView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, invoice_no):
+        try:
+            sale = SaleHeader.objects.get(bill_no=invoice_no)
+            serializer = SaleHeaderSerializer(sale)
+            return Response({"status": "success", "data": serializer.data})
+        except SaleHeader.DoesNotExist:
+            return Response({"error": "Invoice number nnot found!"}, status=404)
+
+
+
+class ProcessReturnExchangeView(APIView):
+    permission_classes = [IsAuthenticated]
+    @transaction.atomic
+    def post(self, request):
+        data = request.data
+        # Hum barcode ID (1, 2, etc.) ko use karke SaleItem dhoondenge
+        barcode_id = data.get('sale_item_id') 
+        action_type = data.get('action_type')
+        new_bc_val = data.get('new_barcode')
+
+        try:
+            # Barcode ID se SaleItem dhoondein jo becha gaya hai
+            sale_item = SaleItem.objects.select_related('sale', 'barcode').get(barcode__id=barcode_id)
+            sale_header = sale_item.sale
+            old_barcode = sale_item.barcode
+
+            # --- STEP 1: Reverse Old Item ---
+            sale_header.total_amount -= sale_item.rate
+            old_barcode.is_active = True
+            old_barcode.save()
+
+            if action_type == 'exchange':
+                # --- STEP 2: Issue New Item ---
+                if not new_bc_val:
+                    return Response({"error": "Scan new item barcode!"}, status=400)
+                
+                new_barcode = GeneratedBarcode.objects.get(barcode_value=new_bc_val, is_active=True)
+                new_rate = new_barcode.transaction.price_with_gst
+                
+                sale_header.total_amount += new_rate
+                new_barcode.is_active = False
+                new_barcode.save()
+
+                sale_item.barcode = new_barcode
+                sale_item.rate = new_rate
+                sale_item.save()
+            else:
+                # --- STEP 3: Pure Return (Delete from Bill) ---
+                sale_item.delete()
+
+            sale_header.save()
+            sale_header.refresh_from_db()
+            
+            return Response({
+                "status": "success",
+                "message": f"Item {action_type}ed successfully",
+                "data": SaleHeaderSerializer(sale_header).data
+            })
+
+        except GeneratedBarcode.DoesNotExist:
+            return Response({"error": "New Barcode not in stock!"}, status=404)
+        except SaleItem.DoesNotExist:
+            return Response({"error": "Sale records not found!"}, status=404)
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
 
 class DashboardViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated]
