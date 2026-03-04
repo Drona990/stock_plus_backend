@@ -96,6 +96,10 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',
+        'core.permissions.IsAccountActive',
+    ),
     'EXCEPTION_HANDLER': 'authentication.utils.exceptions.custom_exception_handler',
 }
 

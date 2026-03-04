@@ -1,24 +1,20 @@
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import BasePermission, IsAuthenticated
 
-class IsSuperuser(IsAuthenticated):
+class IsAccountActive(BasePermission):
+    """
+    The ultimate guard. Checks the database 'is_active' status on every request.
+    """
+    message = "This account has been deactivated."
+
     def has_permission(self, request, view):
-        is_authenticated = super().has_permission(request, view)
-        return is_authenticated and getattr(request.user, 'role', None) == 'superuser'
+        return bool(request.user and request.user.is_authenticated and request.user.is_active)
 
-
-class IsAdminOrSuperuser(IsAuthenticated):
+class IsSuperuser(IsAccountActive):
     def has_permission(self, request, view):
-        is_authenticated = super().has_permission(request, view)
-        return is_authenticated and getattr(request.user, 'role', None) in ['admin', 'superuser']
+        if not super().has_permission(request, view): return False
+        return getattr(request.user, 'role', None) == 'superuser'
 
-
-class IsStaffOrHigher(IsAuthenticated):
+class IsAdminOrSuperuser(IsAccountActive):
     def has_permission(self, request, view):
-        # Pehle check karo ki user login hai ya nahi
-        is_authenticated = super().has_permission(request, view)
-        if not is_authenticated:
-            return False
-            
-        # Role check (Ensure these match your User model roles)
-        user_role = getattr(request.user, 'role', None)
-        return user_role in ['waiter', 'admin', 'superuser']
+        if not super().has_permission(request, view): return False
+        return getattr(request.user, 'role', None) in ['admin', 'superuser']

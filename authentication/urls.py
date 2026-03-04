@@ -24,8 +24,8 @@ urlpatterns = [
     # Admin endpoints - staff management
     path('staff/create/', CreateStaffView.as_view(), name='create-staff'),
     path('staff/list/', ListStaffView.as_view(), name='list-staff'),
-    path('staff/<uuid:staff_id>/deactivate/', DeactivateStaffView.as_view(), name='deactivate-staff'),
-    path('staff/<uuid:staff_id>/activate/', ActivateStaffView.as_view(), name='activate-staff'),
+
+    path('users/<uuid:user_id>/status/<str:action>/',  UserStatusToggleView.as_view(),name='user-status-toggle'),
 
     # Dashboard
     path('profile/update/', UpdateProfileView.as_view(), name='update-profile'),

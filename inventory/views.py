@@ -3,7 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAdminUser
 from django_filters.rest_framework import DjangoFilterBackend
-from core.permissions import IsAdminOrSuperuser
+from core.permissions import IsAccountActive, IsAdminOrSuperuser
 from .models import GeneratedBarcode, ProductGroup, SaleHeader, SaleItem, StockTransaction, Location
 from .serializers import ProductGroupSerializer, SaleHeaderSerializer, StockTransactionSerializer, LocationSerializer
 from .models import InventoryCategory,ProductSubGroup
@@ -64,7 +64,7 @@ def health_check(request):
 
 
 class InventoryBaseViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAdminOrSuperuser]
+    permission_classes = [IsAdminOrSuperuser,IsAccountActive]
 
 class LocationViewSet(InventoryBaseViewSet):
     queryset = Location.objects.all().order_by('name')
@@ -81,7 +81,7 @@ class InventoryCategoryViewSet(InventoryBaseViewSet):
 class ProductGroupViewSet(viewsets.ModelViewSet):
     queryset = ProductGroup.objects.all().order_by('name')
     serializer_class = ProductGroupSerializer
-    permission_classes = [IsAdminOrSuperuser]
+    permission_classes = [IsAdminOrSuperuser,IsAccountActive]
     
     # Filtering setup
     filter_backends = [filters.SearchFilter]
@@ -91,7 +91,7 @@ class ProductGroupViewSet(viewsets.ModelViewSet):
 class ProductSubGroupViewSet(viewsets.ModelViewSet):
     queryset = ProductSubGroup.objects.all().order_by('group__name', 'name')
     serializer_class = ProductSubGroupSerializer
-    permission_classes = [IsAdminOrSuperuser]
+    permission_classes = [IsAdminOrSuperuser,IsAccountActive]
     
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     filterset_fields = ['group'] 
@@ -102,7 +102,7 @@ class ProductSubGroupViewSet(viewsets.ModelViewSet):
 class StockTransactionViewSet(viewsets.ModelViewSet):
     queryset = StockTransaction.objects.all().order_by('-created_at')
     serializer_class = StockTransactionSerializer
-    permission_classes = [IsAuthenticated] 
+    permission_classes = [IsAuthenticated,IsAccountActive] 
 
     def get_serializer_context(self):
         # ✅ Request object ko context mein bhej rahe hain
@@ -122,7 +122,7 @@ class StockTransactionViewSet(viewsets.ModelViewSet):
 
 
 class SalesViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated,IsAccountActive]
     queryset = SaleHeader.objects.all().order_by('-bill_date')
     serializer_class = SaleHeaderSerializer
 
@@ -174,7 +174,7 @@ class SalesViewSet(viewsets.ModelViewSet):
 
 
 class FetchBillForReturnView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated,IsAccountActive]
 
     def get(self, request, invoice_no):
         try:
@@ -187,7 +187,7 @@ class FetchBillForReturnView(APIView):
 
 
 class ProcessReturnExchangeView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated,IsAccountActive]
     @transaction.atomic
     def post(self, request):
         data = request.data
@@ -243,7 +243,7 @@ class ProcessReturnExchangeView(APIView):
             return Response({"error": str(e)}, status=500)
 
 class DashboardViewSet(viewsets.ViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated,IsAccountActive]
     def list(self, request):
         try:
             today = timezone.now().date()

@@ -6,7 +6,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
-from core.permissions import IsAdminOrSuperuser, IsSuperuser
+from core.permissions import IsAccountActive, IsAdminOrSuperuser, IsSuperuser
 from inventory.models import Location
 from .models import CustomUser, OTP, RecoveryContact
 from .serializers import *
@@ -22,8 +22,8 @@ from django.db import transaction
 # ===== ROLE-BASED PERMISSION CLASSES =====
 
 class HealthCheckView(APIView):
-    authentication_classes = [] 
-    permission_classes = [] 
+    authentication_classes = [AllowAny] 
+    permission_classes = [AllowAny] 
 
     def get(self, request):
         return Response(
@@ -83,10 +83,9 @@ class CreateFirstSuperuserView(APIView):
 
 
 
-
 # --- 1. CREATE STAFF VIEW (With 5 User Limit for Admins) ---
 class CreateStaffView(APIView):
-    permission_classes = [IsAdminOrSuperuser]
+    permission_classes = [IsAdminOrSuperuser,IsAccountActive]
 
     def post(self, request):
         print(f"\n--- [LOG: CREATE STAFF STARTED] ---")
@@ -152,7 +151,7 @@ class CreateStaffView(APIView):
 
 # --- CREATE ADMIN VIEW (Fixed logic for data save) ---
 class CreateAdminView(APIView):
-    permission_classes = [IsSuperuser]
+    permission_classes = [IsSuperuser,IsAccountActive]
 
     def post(self, request):
         print(f"\n--- [DEBUG: CREATE ADMIN REQUEST] ---")
@@ -213,7 +212,7 @@ class CreateAdminView(APIView):
 # --- 2. UPDATE PROFILE VIEW (Admin/Superuser Permission Only) ---
 class AdminUpdateUserView(APIView):
     """Admin updates another user's profile. Staff is blocked."""
-    permission_classes = [IsAdminOrSuperuser]
+    permission_classes = [IsAdminOrSuperuser,IsAccountActive]
 
     def put(self, request, user_id):
         # 1. Access Check: Staff block
@@ -249,7 +248,7 @@ class AdminUpdateUserView(APIView):
 # --- 4. SELF PROFILE UPDATE (Blocked for Staff if needed) ---
 class UpdateProfileView(APIView):
     """User updates their own profile"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated,IsAccountActive]
 
     def patch(self, request):
         # ✅ LOGIC: If you want to block staff even from updating their OWN profile
@@ -270,11 +269,9 @@ class UpdateProfileView(APIView):
 
 
 
-
-
 class ListStaffView(APIView):
     """Admin/Superuser views members created by them"""
-    permission_classes = [IsAdminOrSuperuser]
+    permission_classes = [IsAdminOrSuperuser,IsAccountActive]
 
     def get(self, request):
         if request.user.role == 'superuser':
@@ -339,56 +336,47 @@ class ListAdminsView(APIView):
 
 
 
-class DeactivateStaffView(APIView):
-    """Admin deactivates staff"""
-    permission_classes = [IsAdminOrSuperuser]
+class UserStatusToggleView(APIView):
+    """
+    Handles Activation and Deactivation.
+    - Superusers: Full access to toggle any user.
+    - Admins: Can only toggle 'staff' they personally created.
+    """
+    permission_classes = [IsAdminOrSuperuser, IsAccountActive]
 
-    def post(self, request, staff_id):
-        """Deactivate staff member"""
-        try:
-            staff = CustomUser.objects.get(id=staff_id, role='staff')
-        except CustomUser.DoesNotExist:
-            return error_response("Staff not found", 404)
+    def post(self, request, user_id, action):
+        target_user = get_object_or_404(CustomUser, id=user_id)
+        
+        # 1. Permission Check
+        if request.user.role != 'superuser':
+            # Admins cannot deactivate other Admins or Superusers
+            if target_user.role != 'staff' or target_user.created_by != request.user:
+                return error_response("Unauthorized: You can only manage your own staff members.", 403)
 
-        # Check if admin owns this staff
-        if request.user.role == 'admin' and staff.created_by != request.user:
-            return error_response("You can only deactivate your own staff", 403)
+        # 2. Prevent Self-Lockout
+        if target_user == request.user:
+            return error_response("You cannot deactivate your own account.", 400)
 
-        staff.is_active = False
-        staff.save()
+        # 3. Apply Action
+        if action == "activate":
+            target_user.is_active = True
+            message = f"User {target_user.username} has been activated."
+        elif action == "deactivate":
+            target_user.is_active = False
+            message = f"User {target_user.username} has been deactivated. Access revoked."
+        else:
+            return error_response("Invalid action. Use 'activate' or 'deactivate'.", 400)
 
-        return success_response(
-            "Staff deactivated successfully",
-            data={"user_id": str(staff.id), "is_active": staff.is_active}
-        )
-
-class ActivateStaffView(APIView):
-    """Admin activates staff"""
-    permission_classes = [IsAdminOrSuperuser]
-
-    def post(self, request, staff_id):
-        """Activate staff member"""
-        try:
-            staff = CustomUser.objects.get(id=staff_id, role='staff')
-        except CustomUser.DoesNotExist:
-            return error_response("Staff not found", 404)
-
-        # Check if admin owns this staff
-        if request.user.role == 'admin' and staff.created_by != request.user:
-            return error_response("You can only activate your own staff", 403)
-
-        staff.is_active = True
-        staff.save()
+        target_user.save()
 
         return success_response(
-            "Staff activated successfully",
-            data={"user_id": str(staff.id), "is_active": staff.is_active}
+            message, 
+            data={"user_id": str(target_user.id), "is_active": target_user.is_active}
         )
 
 
-    
 class UpdateFCMTokenView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated,IsAccountActive]
     def post(self, request):
         token = request.data.get('fcm_token')
         request.user.fcm_token = token
@@ -396,7 +384,7 @@ class UpdateFCMTokenView(APIView):
         return Response({"status": "success", "message": "FCM Token Updated"})
 
 class UserDashboardView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated,IsAccountActive]
 
     def get(self, request):
         try:
@@ -454,6 +442,37 @@ class CheckUsernameAvailability(APIView):
             "Username availability checked",
             data={"available": not exists}
         )
+
+
+class LoginView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        user = authenticate(
+            request,
+            username=request.data.get("login"),
+            password=request.data.get("password")
+        )
+
+        if not user:
+            return error_response("Invalid credentials", 401)
+
+        refresh = RefreshToken.for_user(user)
+        return success_response(
+            "Login successful",
+            data={
+                "access": str(refresh.access_token),
+                "refresh": str(refresh)
+            }
+        )
+
+
+
+
+##########################################################################################################
+######################################################################################################
+
+
 
 
 # ---------- SIGNUP FLOW ----------
@@ -563,31 +582,6 @@ class CompleteSignup(APIView):
         refresh = RefreshToken.for_user(user)
         return success_response(
             "Signup completed",
-            data={
-                "access": str(refresh.access_token),
-                "refresh": str(refresh)
-            }
-        )
-
-
-# ---------- LOGIN ----------
-
-class LoginView(APIView):
-    permission_classes = [AllowAny]
-
-    def post(self, request):
-        user = authenticate(
-            request,
-            username=request.data.get("login"),
-            password=request.data.get("password")
-        )
-
-        if not user:
-            return error_response("Invalid credentials", 401)
-
-        refresh = RefreshToken.for_user(user)
-        return success_response(
-            "Login successful",
             data={
                 "access": str(refresh.access_token),
                 "refresh": str(refresh)
