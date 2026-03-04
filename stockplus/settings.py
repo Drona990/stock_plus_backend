@@ -146,6 +146,7 @@ MEDIA_ROOT = BASE_DIR / 'media'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 CSRF_TRUSTED_ORIGINS = [
-    "http://10.158.29.96", 
+    "https://stockplus.dronatandi.online",
+    "https://stockweb.dronatandi.online",
     "http://187.77.187.220",
 ]
