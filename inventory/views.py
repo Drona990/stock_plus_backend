@@ -1,13 +1,16 @@
+from venv import logger
+
 from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAdminUser
 from django_filters.rest_framework import DjangoFilterBackend
+from authentication.models import CustomUser
 from core.permissions import IsAccountActive, IsAdminOrSuperuser
 from .models import GeneratedBarcode, ProductGroup, SaleHeader, SaleItem, StockTransaction, Location
 from .serializers import ProductGroupSerializer, SaleHeaderSerializer, StockTransactionSerializer, LocationSerializer
 from .models import InventoryCategory,ProductSubGroup
-from django.db.models import Sum, Count, F, Q, Value, Case, When, CharField
+from django.db.models import FloatField, Sum, Count, F, Q, Value, Case, When, CharField
 from datetime import datetime
 import traceback
 from django.utils import timezone
@@ -18,7 +21,7 @@ from .serializers import (
     InventoryCategorySerializer, ProductSubGroupSerializer
     
 )
-
+from django.db.models.functions import Concat, Coalesce
 import psutil
 import shutil
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
@@ -242,37 +245,54 @@ class ProcessReturnExchangeView(APIView):
         except Exception as e:
             return Response({"error": str(e)}, status=500)
 
+
+
+from rest_framework import viewsets, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from django.utils import timezone
+from django.db.models import Sum, F, Q, Value, CharField, Count, FloatField, Case, When
+from django.db.models.functions import Coalesce, Concat
+from datetime import datetime
+import logging
+
+# Import your models
+from .models import (
+    Location, ProductGroup, StockTransaction, 
+    GeneratedBarcode, SaleHeader, SaleItem
+)
+
+logger = logging.getLogger(__name__)
+
 class DashboardViewSet(viewsets.ViewSet):
-    permission_classes = [IsAuthenticated,IsAccountActive]
+    permission_classes = [IsAuthenticated]
+
+    # ==========================================================================
+    # 1. SUMMARY DASHBOARD (Daily KPI View)
+    # ==========================================================================
     def list(self, request):
         try:
             today = timezone.now().date()
             user = request.user
-            
-            # --- 🛡️ ROLE BASED FILTER LOGIC ---
             is_privileged = user.role in ['superuser', 'admin', 'manager']
 
             if is_privileged:
-                # Admins see global data
                 sales_qs = SaleHeader.objects.filter(bill_date__date=today)
                 stock_qs = GeneratedBarcode.objects.all()
             else:
-                # ✅ Staff see ONLY their sales and their location's stock
-                sales_qs = SaleHeader.objects.filter(
-                    bill_date__date=today, 
-                    sold_by=user
-                )
-                # Relationship path: Barcode -> Transaction -> Location
+                sales_qs = SaleHeader.objects.filter(bill_date__date=today, sold_by=user)
+                # Filter stock by user's assigned location
                 stock_qs = GeneratedBarcode.objects.filter(transaction__location=user.location)
 
-            # --- CALCULATIONS ---
             financials = sales_qs.aggregate(
-                rev=Sum('total_amount'),
-                disc=Sum('discount')
+                rev=Coalesce(Sum('total_amount'), 0.0, output_field=FloatField()),
+                disc=Coalesce(Sum('discount'), 0.0, output_field=FloatField())
             )
             
-            total_rev = financials['rev'] or 0.0
-            total_disc = financials['disc'] or 0.0
+            payment_stats = sales_qs.values('payment_mode').annotate(
+                mode_total=Coalesce(Sum('total_amount'), 0.0, output_field=FloatField())
+            ).order_by('-mode_total')
 
             return Response({
                 "status": "success",
@@ -281,9 +301,10 @@ class DashboardViewSet(viewsets.ViewSet):
                     "current_stock": stock_qs.filter(is_active=True).count(),
                     "items_sold": stock_qs.filter(is_active=False).count(),
                     "financials": {
-                        "total_revenue": float(total_rev),
-                        "total_discount_amt": float(total_disc),
-                        "bill_count": sales_qs.count()
+                        "total_revenue": financials['rev'],
+                        "total_discount_amt": financials['disc'],
+                        "bill_count": sales_qs.count(),
+                        "revenue_by_mode": {item['payment_mode']: item['mode_total'] for item in payment_stats}
                     }
                 },
                 "recent_sales": list(sales_qs.order_by('-bill_date')[:10].values(
@@ -291,78 +312,160 @@ class DashboardViewSet(viewsets.ViewSet):
                 ))
             })
         except Exception as e:
-            print(f"Dashboard Summary Error: {traceback.format_exc()}")
+            logger.error(f"Error in Dashboard list: {str(e)}")
             return Response({"error": str(e)}, status=500)
 
     # ==========================================================================
-    # 2. DETAILED REPORTS (Sales & Stock)
+    # 2. STAFF PERFORMANCE REPORT (Leaderboard)
+    # ==========================================================================
+    @action(detail=False, methods=['get'])
+    def staff_performance_report(self, request):
+        try:
+            period = request.query_params.get('period', 'monthly')
+            loc_id = request.query_params.get('location')
+            today = timezone.now()
+            
+            sales_filter = Q()
+            if period == 'daily':
+                sales_filter &= Q(sales__bill_date__date=today.date())
+            elif period == 'monthly':
+                month = int(request.query_params.get('month', today.month))
+                year = int(request.query_params.get('year', today.year))
+                sales_filter &= Q(sales__bill_date__month=month, sales__bill_date__year=year)
+
+            if loc_id and loc_id != 'null' and loc_id != '':
+                sales_filter &= Q(sales__location_id=loc_id)
+
+            # Get User model dynamically
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            staff_qs = User.objects.filter(role='staff')
+
+            performance_data = staff_qs.annotate(
+                full_name=Concat(Coalesce(F('first_name'), Value('')), Value(' '), Coalesce(F('last_name'), Value('')), output_field=CharField()),
+                total_invoices=Count('sales', filter=sales_filter, distinct=True),
+                revenue=Coalesce(Sum('sales__total_amount', filter=sales_filter), 0.0, output_field=FloatField()),
+            ).values('id', 'username', 'full_name', 'total_invoices', 'revenue').order_by('-revenue')
+
+            report_list = list(performance_data)
+            best = report_list[0] if report_list and report_list[0]['revenue'] > 0 else None
+            
+            return Response({"status": "success", "best_performer": best, "report": report_list})
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+
+    # ==========================================================================
+    # 3. MY PERSONAL REPORT (Secure Isolation)
+    # ==========================================================================
+    @action(detail=False, methods=['get'])
+    def my_personal_report(self, request):
+        user = request.user
+        start_str = request.query_params.get('start_date')
+        end_str = request.query_params.get('end_date')
+
+        try:
+            start_date = timezone.make_aware(datetime.strptime(start_str, '%Y-%m-%d'))
+            end_date = timezone.make_aware(datetime.strptime(end_str, '%Y-%m-%d').replace(hour=23, minute=59, second=59))
+
+            # Query optimized for SaleItem -> SaleHeader mapping
+            qs = SaleItem.objects.select_related('sale', 'barcode').filter(
+                sale__bill_date__range=[start_date, end_date],
+                sale__sold_by=user
+            )
+
+            raw_data = qs.values(
+                'sale__bill_no', 'sale__customer_name', 'sale__bill_date', 'sale__payment_mode',
+                'rate',
+                b_val=F('barcode__barcode_value'), # From GeneratedBarcode model
+            ).order_by('-sale__bill_date')
+
+            grouped = {}
+            for row in raw_data:
+                b_no = row['sale__bill_no']
+                if b_no not in grouped:
+                    grouped[b_no] = {
+                        "bill_no": b_no,
+                        "barcode_no": row['b_val'] or "N/A",
+                        "customer_name": row['sale__customer_name'] or "CASH",
+                        "date": row['sale__bill_date'],
+                        "payment_mode": row['sale__payment_mode'] or "CASH",
+                        "invoice_total": 0.0,
+                    }
+                grouped[b_no]["invoice_total"] += float(row['rate'] or 0.0)
+
+            return Response(list(grouped.values()))
+        except Exception as e:
+            logger.error(f"Personal Report Crash: {str(e)}")
+            return Response({"error": str(e)}, status=500)
+
+    # ==========================================================================
+    # 4. DETAILED AUDIT REPORT (Sales & Stock Global Audit)
     # ==========================================================================
     @action(detail=False, methods=['get'])
     def detailed_report(self, request):
         r_type = request.query_params.get('type')
         start_str = request.query_params.get('start_date')
         end_str = request.query_params.get('end_date')
-        loc_id = request.query_params.get('location') # From Flutter Dropdown
-        user = request.user
-
+        loc_id = request.query_params.get('location')
+        
         try:
-            # Parse dates
             start_date = timezone.make_aware(datetime.strptime(start_str, '%Y-%m-%d'))
             end_date = timezone.make_aware(datetime.strptime(end_str, '%Y-%m-%d').replace(hour=23, minute=59, second=59))
 
             if r_type == 'sales':
-                # Base Query
-                qs = SaleItem.objects.filter(
+                qs = SaleItem.objects.select_related('sale', 'barcode').filter(
                     sale__bill_date__range=[start_date, end_date]
-                ).select_related('sale', 'sale__location', 'sale__sold_by')
-
-                # ✅ PRIVACY & FILTER LOGIC
-                if user.role not in ['superuser', 'admin', 'manager']:
-                    # Staff: Strictly limited to their own data
-                    qs = qs.filter(sale__sold_by=user)
-                elif loc_id and loc_id != 'null':
-                    # Admin: Specific location filter from dropdown
+                )
+                if loc_id and loc_id != 'null' and loc_id != '':
                     qs = qs.filter(sale__location_id=loc_id)
-                
-                data = list(qs.values(
-                    'sale__bill_no', 'sale__customer_name', 
-                    price=F('rate'), date=F('sale__bill_date'),
-                    item_name=F('barcode__transaction__group__name'),
-                    location_name=F('sale__location__name'),
-                    sold_by=F('sale__sold_by__username'),
-                    hsn=F('barcode__transaction__hsn_code')
-                ))
-            else:
-                # --- INVENTORY REPORT ---
-                if user.role not in ['superuser', 'admin', 'manager']:
-                    return Response({"error": "Unauthorized Access to Inventory Reports"}, status=403)
 
-                # ✅ Path Fixed: transaction__location
-                qs = GeneratedBarcode.objects.filter(
+                raw_data = qs.values(
+                    'sale__bill_no', 'sale__customer_name', 'sale__bill_date', 'sale__payment_mode',
+                    'rate',
+                    b_val=F('barcode__barcode_value'),
+                    staff_name=Concat(Coalesce(F('sale__sold_by__first_name'), Value('')), Value(' '), Coalesce(F('sale__sold_by__last_name'), Value(''))),
+                    item_name=F('barcode__transaction__group__name')
+                ).order_by('-sale__bill_date')
+
+                grouped = {}
+                for row in raw_data:
+                    b_no = row['sale__bill_no']
+                    if b_no not in grouped:
+                        grouped[b_no] = {
+                            "bill_no": b_no, 
+                            "barcode_no": row['b_val'] or "N/A",
+                            "customer_name": row['sale__customer_name'] or "CASH", 
+                            "date": row['sale__bill_date'], 
+                            "payment_mode": row['sale__payment_mode'], 
+                            "sold_by": row['staff_name'], 
+                            "invoice_total": 0.0,
+                            "item_name": row['item_name']
+                        }
+                    grouped[b_no]["invoice_total"] += float(row['rate'] or 0.0)
+                return Response(list(grouped.values()))
+
+            elif r_type == 'stock':
+                qs = GeneratedBarcode.objects.select_related('transaction__group').filter(
                     transaction__created_at__range=[start_date, end_date]
-                ).select_related('transaction', 'transaction__location', 'transaction__group')
-                
-                if loc_id and loc_id != 'null':
+                )
+                if loc_id and loc_id != 'null' and loc_id != '':
                     qs = qs.filter(transaction__location_id=loc_id)
 
-                data = list(qs.annotate(
+                data = qs.values(
+                    date=F('transaction__created_at'),
+                    barcode_no=F('barcode_value'),
+                    item_name=F('transaction__group__name'),
+                    price=F('transaction__price_with_gst'),
                     status_text=Case(
-                        When(is_active=True, then=Value('IN STOCK')), 
-                        default=Value('SOLD'), 
+                        When(is_active=True, then=Value('IN STOCK')),
+                        default=Value('SOLD'),
                         output_field=CharField()
                     )
-                ).values(
-                    'status_text',
-                    date=F('transaction__created_at'),
-                    item_name=F('transaction__group__name'),
-                    location_name=F('transaction__location__name'),
-                    price=F('transaction__price_with_gst'),
-                    sold_by=Value('System'), 
-                    hsn=F('transaction__hsn_code')
-                ))
-            
-            return Response(data)
+                ).order_by('-transaction__created_at')
+                return Response(list(data))
 
+            return Response({"error": f"Invalid type '{r_type}'"}, status=400)
+            
         except Exception as e:
-            print(f"Report Action Error: {traceback.format_exc()}")
+            logger.error(f"Detailed Audit Crash: {str(e)}")
             return Response({"error": str(e)}, status=500)
