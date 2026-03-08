@@ -1,5 +1,4 @@
 from venv import logger
-
 from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -27,6 +26,13 @@ import shutil
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.permissions import AllowAny
 from django.db import connection
+
+from django.utils import timezone
+from datetime import datetime
+import logging
+logger = logging.getLogger(__name__)
+
+
 
 @api_view(['GET'])
 @authentication_classes([]) 
@@ -246,24 +252,6 @@ class ProcessReturnExchangeView(APIView):
             return Response({"error": str(e)}, status=500)
 
 
-
-from rest_framework import viewsets, status
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
-from django.utils import timezone
-from django.db.models import Sum, F, Q, Value, CharField, Count, FloatField, Case, When
-from django.db.models.functions import Coalesce, Concat
-from datetime import datetime
-import logging
-
-# Import your models
-from .models import (
-    Location, ProductGroup, StockTransaction, 
-    GeneratedBarcode, SaleHeader, SaleItem
-)
-
-logger = logging.getLogger(__name__)
 
 class DashboardViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated]

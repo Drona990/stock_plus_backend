@@ -96,7 +96,7 @@ class StockTransactionSerializer(serializers.ModelSerializer):
         repr['shop_details'] = {
             "name": "SVENSKA STORE",
             "address": "Bengaluru, Karnataka",
-            "mobile": "+91 9876543210"
+            "mobile": "+91 0000000000"
         }
         return repr
 
