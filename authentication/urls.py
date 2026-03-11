@@ -1,5 +1,9 @@
-from django.urls import path
+from django.urls import path,include
 from .views import *
+from rest_framework.routers import DefaultRouter
+
+router = DefaultRouter()
+router.register(r'staff', StaffViewSet, basename='staff')
 
 urlpatterns = [
     path("health/", HealthCheckView.as_view(), name="health-check"),
@@ -32,5 +36,8 @@ urlpatterns = [
     path('user/update-fcm-token/', UpdateFCMTokenView.as_view(), name='update-fcm'),
     path('user/dashboard/', UserDashboardView.as_view(), name='user-dashboard'),
     path('user/<uuid:user_id>/update/', AdminUpdateUserView.as_view(), name='admin-user-update'),
+
+    path('user/', include(router.urls)),
+    path('auth/silent-switch/', silent_login_switch, name='silent-switch'),
 
 ]

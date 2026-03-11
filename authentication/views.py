@@ -18,6 +18,13 @@ from rest_framework import status
 from django.db.models import Sum
 from django.utils import timezone
 from django.db import transaction
+from rest_framework import viewsets
+from django.contrib.auth import get_user_model
+from rest_framework.decorators import api_view, permission_classes
+
+
+User = get_user_model()
+
 
 # ===== ROLE-BASED PERMISSION CLASSES =====
 
@@ -588,6 +595,45 @@ class CompleteSignup(APIView):
             }
         )
 
+
+
+
+
+# 1. Staff List ViewSet (Sirf Staff role ke liye)
+class StaffViewSet(viewsets.ReadOnlyModelViewSet):
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        # Aapka CustomUser model filter karega
+        return User.objects.filter(role='staff').order_by('first_name')
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        # CustomUser se name fetch ho raha hai
+        data = [{"id": u.id, "name": f"{u.first_name} {u.last_name}".strip() or u.username} for u in queryset]
+        return Response({"success": True, "data": data})
+
+# 2. Identity Swap Logic (Silent Login)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def silent_login_switch(request):
+    target_user_id = request.data.get('user_id')
+    try:
+        # Check if user exists and is a staff member
+        target_user = User.objects.get(id=target_user_id, role='staff')
+        
+        # Generate new JWT for the selected staff
+        refresh = RefreshToken.for_user(target_user)
+        
+        return Response({
+            "success": True,
+            "data": {
+                "access": str(refresh.access_token),
+                "refresh": str(refresh),
+            }
+        })
+    except User.DoesNotExist:
+        return Response({"success": False, "message": "Staff not found"}, status=404)
 
 # ---------- FORGOT PASSWORD ----------
 
