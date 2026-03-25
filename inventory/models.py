@@ -13,6 +13,19 @@ class Location(models.Model):
         return self.name
 
 
+
+class ItemLocation(models.Model):
+    name = models.CharField(max_length=100, unique=True)
+
+    class Meta:
+        verbose_name_plural = "ItemLocations"
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+
+
 class InventoryCategory(models.Model):
     name = models.CharField(max_length=100, unique=True)
     description = models.TextField(blank=True, null=True)
@@ -68,7 +81,8 @@ class StockTransaction(models.Model):
     group = models.ForeignKey('ProductGroup', on_delete=models.PROTECT)
     sub_group = models.ForeignKey('ProductSubGroup', on_delete=models.PROTECT)
     location = models.ForeignKey('Location', on_delete=models.PROTECT, null=True, blank=True)
-    
+    item_location = models.ForeignKey('ItemLocation', on_delete=models.PROTECT, null=True, blank=True)
+
     # Stock Details
     no_of_pieces = models.IntegerField() 
     pcs_per_unit = models.IntegerField(default=1)  # e.g., 1 (for single) or 2 (for pair)

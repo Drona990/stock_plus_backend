@@ -6,8 +6,8 @@ from rest_framework.permissions import IsAdminUser
 from django_filters.rest_framework import DjangoFilterBackend
 from authentication.models import CustomUser
 from core.permissions import IsAccountActive, IsAdminOrSuperuser
-from .models import GeneratedBarcode, ProductGroup, SaleHeader, SaleItem, StockTransaction, Location
-from .serializers import ProductGroupSerializer, SaleHeaderSerializer, StockTransactionSerializer, LocationSerializer
+from .models import GeneratedBarcode, ItemLocation, ProductGroup, SaleHeader, SaleItem, StockTransaction, Location
+from .serializers import ItemLocationSerializer, ProductGroupSerializer, SaleHeaderSerializer, StockTransactionSerializer, LocationSerializer
 from .models import InventoryCategory,ProductSubGroup
 from django.db.models import FloatField, Sum, Count, F, Q, Value, Case, When, CharField
 from datetime import datetime
@@ -80,6 +80,14 @@ class LocationViewSet(InventoryBaseViewSet):
     serializer_class = LocationSerializer
     filter_backends = [filters.SearchFilter]
     search_fields = ['name']
+
+
+class ItemLocationViewSet(InventoryBaseViewSet):
+    queryset = ItemLocation.objects.all().order_by('name')
+    serializer_class = ItemLocationSerializer
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['name']
+
 
 class InventoryCategoryViewSet(InventoryBaseViewSet):
     queryset = InventoryCategory.objects.all().order_by('name')
@@ -477,16 +485,19 @@ class MasterReportViewSet(viewsets.ViewSet):
             now_local = timezone.localtime(timezone.now())
 
             if category == 'STOCK':
-                stock_qs = GeneratedBarcode.objects.select_related('transaction__group', 'transaction__sub_group').filter(is_active=True)
+                stock_qs = GeneratedBarcode.objects.select_related('transaction__group', 'transaction__sub_group','transaction__item_location').filter(is_active=True)
                 raw_data = [{
                     "barcode": b.barcode_value,
                     "group": b.transaction.group.name,
                     "sub_master": b.transaction.sub_group.name,
+                    "item_location_name": b.transaction.item_location.name if b.transaction.item_location else "No Rack",
                     "hsn": b.transaction.hsn_code,
                     "cgst": float(b.transaction.cgst_rate),
                     "sgst": float(b.transaction.sgst_rate),
                     "igst": float(b.transaction.igst_rate),
-                    "price": float(b.transaction.price_with_gst)
+                    "price": float(b.transaction.cost_price),
+                    "price_with_gst": float(b.transaction.price_with_gst)
+
                 } for b in stock_qs]
                 
                 counts = {}
@@ -519,7 +530,8 @@ class MasterReportViewSet(viewsets.ViewSet):
                             "cgst_amt": float(itm.cgst_amt),
                             "sgst_amt": float(itm.sgst_amt),
                             "igst_amt": float(itm.igst_amt),
-                            "rate": float(itm.rate)
+                            "rate": float(itm.rate),
+
                         } for itm in sale.items.all()]
                     })
                 return Response({

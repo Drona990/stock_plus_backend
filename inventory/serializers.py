@@ -2,7 +2,7 @@
 from num2words import num2words
 import traceback
 from rest_framework import serializers
-from .models import InventoryCategory, ProductSubGroup, SaleHeader, SaleItem, Location
+from .models import InventoryCategory, ItemLocation, ProductSubGroup, SaleHeader, SaleItem, Location
 from .models import ProductGroup , StockTransaction, GeneratedBarcode
 import random
 from django.db import transaction
@@ -13,6 +13,12 @@ logger = logging.getLogger(__name__)
 class LocationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Location
+        fields = ['id', 'name']
+
+
+class ItemLocationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ItemLocation
         fields = ['id', 'name']
 
 
@@ -114,12 +120,15 @@ class StockTransactionSerializer(serializers.ModelSerializer):
         repr['no_of_pieces'] = instance.barcodes.filter(is_active=True).count()
         repr['sub_group_name'] = instance.sub_group.name if instance.sub_group else "N/A"
         repr['location_name'] = instance.location.name if instance.location else "Main Store"
+        repr['item_location_name'] = instance.item_location.name if instance.item_location else "No Rack"
         repr['shop_details'] = {
             "name": "SVENSKA STORE",
             "address": "Bengaluru, Karnataka",
             "mobile": "+91 0000000000"
         }
         return repr
+
+
 # ==========================================================================
 # 3. SALES SERIALIZERS (FIXED & CLEANED)
 # ==========================================================================
