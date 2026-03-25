@@ -46,52 +46,73 @@ class GeneratedBarcodeSerializer(serializers.ModelSerializer):
 
 class StockTransactionSerializer(serializers.ModelSerializer):
     barcode_list = serializers.SerializerMethodField()
+    formatted_date = serializers.DateTimeField(source='created_at', format="%Y-%m-%d %I:%M %p", read_only=True)
 
     class Meta:
         model = StockTransaction
         fields = '__all__'
-        # ✅ Location ko read_only rakhna hai kyunki ye auto-fill hogi
         read_only_fields = ['location']
 
     def get_barcode_list(self, obj):
-        return list(obj.barcodes.values_list('barcode_value', flat=True))
+        # Sirf wahi barcodes jo shop mein baki hain
+        return list(obj.barcodes.filter(is_active=True).values_list('barcode_value', flat=True))
+
+    def _generate_barcodes(self, transaction_obj, count):
+        new_barcodes = []
+        for _ in range(count):
+            unique_code = ''.join([str(random.randint(0, 9)) for _ in range(8)])
+            new_barcodes.append(
+                GeneratedBarcode(transaction=transaction_obj, barcode_value=unique_code, is_active=True)
+            )
+        if new_barcodes:
+            GeneratedBarcode.objects.bulk_create(new_barcodes)
 
     @transaction.atomic
     def create(self, validated_data):
-        logger.info("--- STOCK TRANSACTION CREATE START ---")
-        try:
-            # 📍 AUTO-SAVE LOCATION LOGIC
-            request = self.context.get('request')
-            if request and hasattr(request.user, 'location'):
-                # Login user ki profile se location uthakar validated_data mein add kar rahe hain
-                validated_data['location'] = request.user.location 
-            
-            # 1. Save Transaction with Auto-Location
-            transaction_obj = StockTransaction.objects.create(**validated_data)
-            
-            # 2. Bulk Barcode Generation
-            num_pieces = validated_data.get('no_of_pieces', 0)
-            new_barcodes = []
-            for _ in range(num_pieces):
-                unique_code = ''.join([str(random.randint(0, 9)) for _ in range(8)])
-                new_barcodes.append(
-                    GeneratedBarcode(transaction=transaction_obj, barcode_value=unique_code)
-                )
-            
-            if new_barcodes:
-                GeneratedBarcode.objects.bulk_create(new_barcodes)
-                logger.info(f"Successfully created {len(new_barcodes)} barcodes for location: {transaction_obj.location}")
-            
-            return transaction_obj
+        request = self.context.get('request')
+        if request and hasattr(request.user, 'location'):
+            validated_data['location'] = request.user.location 
+        
+        transaction_obj = StockTransaction.objects.create(**validated_data)
+        num_pieces = validated_data.get('no_of_pieces', 0)
+        self._generate_barcodes(transaction_obj, num_pieces)
+        return transaction_obj
 
-        except Exception as e:
-            logger.error(f"Stock Error: {str(e)}")
-            raise serializers.ValidationError({"server_error": str(e)})
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        # 🛡️ SMART UPDATE: Sold items ko safe rakh kar baki manage karna
+        new_pieces_input = validated_data.get('no_of_pieces', instance.no_of_pieces)
+        
+        active_barcodes = instance.barcodes.filter(is_active=True)
+        sold_barcodes_count = instance.barcodes.filter(is_active=False).count()
+        current_active_count = active_barcodes.count()
+
+        # User ne jo total pieces likhe hain, wo sold items se kam nahi ho sakte
+        if new_pieces_input < sold_barcodes_count:
+            raise serializers.ValidationError({
+                "error": f"Quantity {sold_barcodes_count} se kam nahi ho sakti kyunki itne items sell ho chuke hain."
+            })
+
+        # Naye active pieces jo hume maintain karne hain
+        target_active_count = new_pieces_input - sold_barcodes_count
+
+        if target_active_count > current_active_count:
+            # Extra pieces add karne hain
+            diff = target_active_count - current_active_count
+            self._generate_barcodes(instance, diff)
+        elif target_active_count < current_active_count:
+            # Unsold pieces kam karne hain
+            to_remove = current_active_count - target_active_count
+            ids_to_delete = active_barcodes.order_by('-id').values_list('id', flat=True)[:to_remove]
+            GeneratedBarcode.objects.filter(id__in=ids_to_delete).delete()
+
+        return super().update(instance, validated_data)
 
     def to_representation(self, instance):
         repr = super().to_representation(instance)
+        # 💡 UI PERSISTENCE: Field mein wahi dikhega jo bacha hua (Active) hai
+        repr['no_of_pieces'] = instance.barcodes.filter(is_active=True).count()
         repr['sub_group_name'] = instance.sub_group.name if instance.sub_group else "N/A"
-        # Display Location name in response
         repr['location_name'] = instance.location.name if instance.location else "Main Store"
         repr['shop_details'] = {
             "name": "SVENSKA STORE",
@@ -99,7 +120,6 @@ class StockTransactionSerializer(serializers.ModelSerializer):
             "mobile": "+91 0000000000"
         }
         return repr
-
 # ==========================================================================
 # 3. SALES SERIALIZERS (FIXED & CLEANED)
 # ==========================================================================

@@ -107,28 +107,37 @@ class ProductSubGroupViewSet(viewsets.ModelViewSet):
     search_fields = ['name', 'group__name']
 
 
-
 class StockTransactionViewSet(viewsets.ModelViewSet):
     queryset = StockTransaction.objects.all().order_by('-created_at')
     serializer_class = StockTransactionSerializer
-    permission_classes = [IsAuthenticated,IsAccountActive] 
 
     def get_serializer_context(self):
-        # ✅ Request object ko context mein bhej rahe hain
         context = super().get_serializer_context()
         context.update({"request": self.request})
         return context
 
-    def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        if serializer.is_valid():
-            self.perform_create(serializer)
-            return Response({
-                "message": "Stock added and Barcodes generated successfully!",
-                "data": serializer.data
-            }, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    @transaction.atomic
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        active_barcodes = instance.barcodes.filter(is_active=True)
+        sold_barcodes = instance.barcodes.filter(is_active=False)
 
+        if sold_barcodes.exists():
+            # 💡 SMART DELETE: Jo bik gaye unhe rehne do, baki uda do
+            count_removed = active_barcodes.count()
+            active_barcodes.delete()
+            
+            # Record ko update kar do ki ab zero active pieces hain
+            instance.no_of_pieces = 0
+            instance.save()
+            
+            return Response({
+                "message": f"Partial Delete: {count_removed} unsold items delete ho gaye hain. Sold items ka record bacha liya gaya hai."
+            }, status=status.HTTP_200_OK)
+        
+        # Agar ek bhi nahi bika, toh poora delete kar do
+        self.perform_destroy(instance)
+        return Response({"message": "Stock fully deleted successfully!"}, status=status.HTTP_200_OK)
 
 class SalesViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated,IsAccountActive]
@@ -261,7 +270,7 @@ class DashboardViewSet(viewsets.ViewSet):
     # ==========================================================================
     def list(self, request):
         try:
-            today = timezone.now().date()
+            today = timezone.localtime().date()
             user = request.user
             is_privileged = user.role in ['superuser', 'admin', 'manager']
 
@@ -311,7 +320,7 @@ class DashboardViewSet(viewsets.ViewSet):
         try:
             period = request.query_params.get('period', 'monthly')
             loc_id = request.query_params.get('location')
-            today = timezone.now()
+            today = timezone.localtime().date()
             
             sales_filter = Q()
             if period == 'daily':
@@ -456,4 +465,67 @@ class DashboardViewSet(viewsets.ViewSet):
             
         except Exception as e:
             logger.error(f"Detailed Audit Crash: {str(e)}")
+            return Response({"error": str(e)}, status=500)
+
+
+
+class MasterReportViewSet(viewsets.ViewSet):
+    def list(self, request):
+        try:
+            category = request.query_params.get('category', 'SALES')
+            r_type = request.query_params.get('type', 'TODAY')
+            now_local = timezone.localtime(timezone.now())
+
+            if category == 'STOCK':
+                stock_qs = GeneratedBarcode.objects.select_related('transaction__group', 'transaction__sub_group').filter(is_active=True)
+                raw_data = [{
+                    "barcode": b.barcode_value,
+                    "group": b.transaction.group.name,
+                    "sub_master": b.transaction.sub_group.name,
+                    "hsn": b.transaction.hsn_code,
+                    "cgst": float(b.transaction.cgst_rate),
+                    "sgst": float(b.transaction.sgst_rate),
+                    "igst": float(b.transaction.igst_rate),
+                    "price": float(b.transaction.price_with_gst)
+                } for b in stock_qs]
+                
+                counts = {}
+                for item in raw_data:
+                    counts[item['sub_master']] = counts.get(item['sub_master'], 0) + 1
+
+                return Response({
+                    "status": "success", "data": raw_data, "item_wise_counts": counts,
+                    "summary": {"total_val": sum(i['price'] for i in raw_data), "total_count": len(raw_data)}
+                })
+
+            else: # --- SALES ---
+                sales_qs = SaleHeader.objects.prefetch_related('items__barcode__transaction__group').all()
+                if r_type == 'TODAY': sales_qs = sales_qs.filter(bill_date__date=now_local.date())
+                elif r_type == 'MONTH': sales_qs = sales_qs.filter(bill_date__month=request.query_params.get('month'))
+                elif r_type == 'CUSTOM': sales_qs = sales_qs.filter(bill_date__date__range=[request.query_params.get('start_date'), request.query_params.get('end_date')])
+
+                sales_list = []
+                for sale in sales_qs:
+                    sales_list.append({
+                        "bill_no": sale.bill_no,
+                        "customer": sale.customer_name or "CASH",
+                        "date": timezone.localtime(sale.bill_date).strftime("%d-%m-%Y"),
+                        "mode": sale.payment_mode or "CASH",
+                        "total": float(sale.total_amount),
+                        "items": [{
+                            "name": itm.barcode.transaction.group.name,
+                            "barcode": itm.barcode.barcode_value,
+                            "hsn": itm.barcode.transaction.group.hsn_code,
+                            "cgst_amt": float(itm.cgst_amt),
+                            "sgst_amt": float(itm.sgst_amt),
+                            "igst_amt": float(itm.igst_amt),
+                            "rate": float(itm.rate)
+                        } for itm in sale.items.all()]
+                    })
+                return Response({
+                    "status": "success", 
+                    "data": sales_list, 
+                    "summary": {"rev": sum(s['total'] for s in sales_list)}
+                })
+        except Exception as e:
             return Response({"error": str(e)}, status=500)
