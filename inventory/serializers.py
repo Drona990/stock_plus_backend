@@ -122,9 +122,9 @@ class StockTransactionSerializer(serializers.ModelSerializer):
         repr['location_name'] = instance.location.name if instance.location else "Main Store"
         repr['item_location_name'] = instance.item_location.name if instance.item_location else "No Rack"
         repr['shop_details'] = {
-            "name": "SVENSKA STORE",
-            "address": "Bengaluru, Karnataka",
-            "mobile": "+91 0000000000"
+            "name": "BRAND BANK",
+            "address": "Brand Bank , Bengaluru",
+            "mobile": "9986055630" 
         }
         return repr
 
