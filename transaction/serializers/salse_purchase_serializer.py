@@ -1,12 +1,14 @@
 from rest_framework import serializers
 from django.db import transaction
-from ..models import SalesHeader, SalesDetail, PurchaseHeader, PurchaseDetail
+from ..models import (
+    SalesHeader, SalesDetail, SalesLedger, 
+    PurchaseHeader, PurchaseDetail, PurchaseLedger
+)
 
-# --- DETAIL SERIALIZERS ---
 class SalesDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = SalesDetail
-        exclude = ['header'] # Header hum create method mein pass karenge
+        exclude = ['header']
 
 class PurchaseDetailSerializer(serializers.ModelSerializer):
     class Meta:
@@ -21,18 +23,34 @@ class SalesHeaderSerializer(serializers.ModelSerializer):
     class Meta:
         model = SalesHeader
         fields = '__all__'
+        read_only_fields = ['billno'] # Auto-generate hoga
 
     def create(self, validated_data):
         details_data = validated_data.pop('details')
         try:
             with transaction.atomic():
+                # 1. Save Sales Bill
                 header = SalesHeader.objects.create(**validated_data)
+                
+                # 2. Save Details
                 for detail in details_data:
                     SalesDetail.objects.create(header=header, **detail)
+
+                # 3. Save to SalesLedger (CTYPE: To)
+                SalesLedger.objects.create(
+                    invtype="SALES",
+                    invno=header.billno,
+                    invdate=header.billdate,
+                    inname=header.name,
+                    inaddress=header.address,
+                    invgst=header.gst_number,
+                    trcr=0.00,
+                    trdr=header.grand_totamt,
+                    ctype="To" # Client Requirement
+                )
                 return header
         except Exception as e:
-            print(f"💥 DATABASE ERROR: {str(e)}") # Terminal check karein
-            raise serializers.ValidationError({"error": str(e)})
+            raise serializers.ValidationError({"error": f"Sales Error: {str(e)}"})
 
 class PurchaseHeaderSerializer(serializers.ModelSerializer):
     details = PurchaseDetailSerializer(many=True)
@@ -40,15 +58,31 @@ class PurchaseHeaderSerializer(serializers.ModelSerializer):
     class Meta:
         model = PurchaseHeader
         fields = '__all__'
+        read_only_fields = ['billno']
 
     def create(self, validated_data):
         details_data = validated_data.pop('details')
         try:
             with transaction.atomic():
+                # 1. Save Purchase Bill
                 header = PurchaseHeader.objects.create(**validated_data)
+                
+                # 2. Save Details
                 for detail in details_data:
                     PurchaseDetail.objects.create(header=header, **detail)
+
+                # 3. Save to PurchaseLedger (CTYPE: By)
+                PurchaseLedger.objects.create(
+                    invtype="PURCHASE",
+                    invno=header.billno,
+                    invdate=header.billdate,
+                    inname=header.name,
+                    inaddress=header.address,
+                    invgst=header.gst_number,
+                    trcr=header.grand_totamt,
+                    trdr=0.00,
+                    ctype="By" # Client Requirement
+                )
                 return header
         except Exception as e:
-            print(f"💥 DATABASE ERROR: {str(e)}")
-            raise serializers.ValidationError({"error": str(e)})
+            raise serializers.ValidationError({"error": f"Purchase Error: {str(e)}"})

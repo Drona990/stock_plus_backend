@@ -15,6 +15,7 @@ class BaseMaster(models.Model):
     bank_name = models.CharField(max_length=100, blank=True, null=True)
     account_no = models.CharField(max_length=50, blank=True, null=True)
     ifsc_code = models.CharField(max_length=20, blank=True, null=True)
+    bank_address = models.TextField(blank=True, null=True)
     pan_no = models.CharField(max_length=15, blank=True, null=True)
     credit_days = models.IntegerField(default=30)
 
@@ -65,3 +66,35 @@ class UOMMaster(models.Model):
     
 #.........................................***......................................
 #.........................................***......................................
+
+class Ledger(models.Model):
+    name = models.CharField(max_length=255) # Display Name
+    normalized_name = models.CharField(max_length=255, unique=True) # Unique Lowercase
+    
+    opening_balance_credit = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
+    opening_balance_debit = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
+    
+    # Dropdown selections
+    group = models.CharField(max_length=100) # SALES, PURCHASE, SUNDRY DEBTOR
+    head = models.CharField(max_length=100)
+    group_wise = models.CharField(max_length=100)
+    
+    delflag = models.CharField(max_length=1, default=' ') 
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        # Unique check ke liye name ko lowercase karein
+        self.normalized_name = self.name.strip().lower()
+        
+        # Edit Logic: Agar ID pehle se hai, toh 'M' flag set karein
+        if self.pk:
+            self.delflag = 'M'
+            
+        # CR/DR Mutual Exclusion: Ek waqt mein ek hi amount rahega
+        if float(self.opening_balance_credit) > 0:
+            self.opening_balance_debit = 0.00
+        elif float(self.opening_balance_debit) > 0:
+            self.opening_balance_credit = 0.00
+            
+        super(Ledger, self).save(*args, **kwargs)
