@@ -1,5 +1,5 @@
 from django.db import models
-from master.models import CustomerMaster, SupplierMaster
+from master.models import CustomerMaster, Ledger, SupplierMaster
 from django.utils import timezone
 import string
 import random
@@ -163,3 +163,39 @@ class CashTransaction(models.Model):
 
     def __str__(self):
         return f"{self.voucher_type} #{self.voucher_no} - {self.ledger.name}"
+    
+#-----------------------------------*****------------------------------------------------------
+#-----------------------------------*****------------------------------------------------------
+
+
+class JournalVoucher(models.Model):
+    voucher_no = models.CharField(max_length=20, unique=True, editable=False)
+    date = models.DateField()
+    narration = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.CharField(max_length=50, default='ADMIN')
+
+    def save(self, *args, **kwargs):
+        if not self.voucher_no:
+            # Auto-generate Voucher Number (JV-0001, JV-0002...)
+            last_v = JournalVoucher.objects.all().order_by('id').last()
+            if not last_v:
+                self.voucher_no = 'JV-0001'
+            else:
+                v_int = int(last_v.voucher_no.split('-')[1])
+                self.voucher_no = f'JV-{str(v_int + 1).zfill(4)}'
+        super(JournalVoucher, self).save(*args, **kwargs)
+
+    def __str__(self):
+        return self.voucher_no
+
+class JournalItem(models.Model):
+    TYPE_CHOICES = [('DEBIT', 'DEBIT'), ('CREDIT', 'CREDIT')]
+
+    voucher = models.ForeignKey(JournalVoucher, related_name='items', on_delete=models.CASCADE)
+    ledger = models.ForeignKey(Ledger, on_delete=models.CASCADE)
+    amount = models.DecimalField(max_digits=15, decimal_places=2)
+    type = models.CharField(max_length=10, choices=TYPE_CHOICES)
+
+    def __str__(self):
+        return f"{self.ledger.name} - {self.type} - {self.amount}"
