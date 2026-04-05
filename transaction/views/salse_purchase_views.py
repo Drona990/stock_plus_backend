@@ -5,14 +5,97 @@ from transaction.serializers.salse_purchase_serializer import PurchaseHeaderSeri
 from ..models import PurchaseLedger, SalesHeader, PurchaseHeader, SalesLedger
 import logging
 from rest_framework.response import Response
-
 logger = logging.getLogger(__name__)
-
 from django.db.models import Q
 from rest_framework.decorators import api_view, permission_classes
 from django.forms.models import model_to_dict
+import traceback
 
 
+@api_view(['GET'])
+def get_invoice_print_data(request):
+    inv_no = request.query_params.get('inv_no')
+    
+    # LOG 1: Check if API is hit
+    print(f"\n--- DEBUG: Invoice Print API Hit for Inv No: {inv_no} ---")
+
+    if not inv_no:
+        return Response({"status": "error", "message": "Invoice number is required"}, status=400)
+
+    try:
+        # LOG 2: Database Query Start
+        print("DEBUG: Fetching SalesHeader from DB...")
+        header = SalesHeader.objects.filter(billno=inv_no, delflag=' ').first()
+        
+        if not header:
+            print(f"DEBUG: Invoice {inv_no} not found in SalesHeader table.")
+            return Response({"status": "error", "message": "Invoice not found"}, status=404)
+
+        print(f"DEBUG: Found Header ID: {header.id}, Customer: {header.name}")
+
+        # LOG 3: Mapping Data
+        try:
+            # Check if customer object exists to avoid AttributeError
+            customer_mobile = ""
+            if hasattr(header, 'customer') and header.customer:
+                customer_mobile = getattr(header.customer, 'mobile', "")
+            
+            print("DEBUG: Mapping basic fields...")
+            data = {
+                "name": header.name or "",
+                "address": header.address or "",
+                "gst_number": header.gst_number or "",
+                "mobile": customer_mobile,
+                "billno": header.billno,
+                "billdate": header.billdate.strftime('%Y-%m-%d') if header.billdate else "",
+                "purchase_order_no": header.purchase_order_no or "",
+                "purchase_order_date": header.purchase_order_date.strftime('%Y-%m-%d') if header.purchase_order_date else "",
+                "dc_no": header.dc_no or "",
+                "dc_date": header.dc_date.strftime('%Y-%m-%d') if header.dc_date else "",
+                "no_of_package": header.no_of_package or "",
+                "amtin_words": header.amtin_words or "",
+                "totalamount": str(header.totalamount or 0.00),
+                "cgst": str(header.cgst or 0.00),
+                "sgst": str(header.sgst or 0.00),
+                "grand_totamt": str(header.grand_totamt or 0.00),
+            }
+
+            # LOG 4: Mapping Details (Items)
+            print("DEBUG: Fetching related SalesDetail (items)...")
+            # header.details.all() works only if related_name='details' is in ForeignKey
+            details_list = []
+            for detail in header.details.all():
+                details_list.append({
+                    "sno": detail.sno,
+                    "product_name": detail.product_name,
+                    "hsncode": detail.hsncode or "",
+                    "qty": str(detail.qty),
+                    "rate": str(detail.rate),
+                    "total": str(detail.total)
+                })
+            
+            data["details"] = details_list
+            print(f"DEBUG: Successfully mapped {len(details_list)} items.")
+
+            return Response({"status": "success", "data": data}, status=status.HTTP_200_OK)
+
+        except Exception as map_err:
+            print("DEBUG: Error during data mapping!")
+            print(traceback.format_exc()) # Print full error stack
+            raise map_err
+
+    except Exception as e:
+        # LOG 5: Critical Failure
+        print("\n!!! CRITICAL ERROR IN INVOICE PRINT API !!!")
+        print(f"Error Type: {type(e).__name__}")
+        print(f"Error Message: {str(e)}")
+        print(traceback.format_exc()) # Yeh terminal mein batayega kaunsi line pe error hai
+        
+        return Response({
+            "status": "error", 
+            "message": "Internal Server Error",
+            "debug_info": str(e) # Sirf development ke liye
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])

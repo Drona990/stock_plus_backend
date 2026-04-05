@@ -2,7 +2,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from transaction.views.cash_transaction_views import CashTransactionViewSet, LedgerReportViewSet
 from transaction.views.journal_entry_views import JournalVoucherViewSet
-from transaction.views.salse_purchase_views import PurchaseViewSet, SalesViewSet, get_advanced_ledger_report
+from transaction.views.salse_purchase_views import PurchaseViewSet, SalesViewSet, get_advanced_ledger_report, get_invoice_print_data
 
 
 router = DefaultRouter()
@@ -18,4 +18,6 @@ router.register(r'journal', JournalVoucherViewSet, basename='journal_entry_vouch
 urlpatterns = [
     path('', include(router.urls)),
     path('ledger-report/', get_advanced_ledger_report, name='ledger-report'),
+    path('invoice-print-data/', get_invoice_print_data, name='invoice-pdf-data'),
+
 ]
